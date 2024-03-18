@@ -6,16 +6,20 @@
 #include <LiquidCrystal_I2C.h> //LCD library
 
 #define REPORTING_PERIOD_MS 1000
-
+#define HardwareSerial
 
 //pzem sensor pins
-PZEM004Tv30 pzem1(Serial, 3, 1);
-PZEM004Tv30 pzem2(&Serial1, 10, 9);
+PZEM004Tv30 pzem1(&Serial, 3,1); // UART0 (Serial0) on pins 3 (RX) and 1 (TX)
+PZEM004Tv30 pzem2(&Serial2, 16,17); // UART2 (Serial2) on pins 16 (RX) and 17 (TX)
+
+//#define SERIAL_PORT Serial
+//#define SERIAL2_PORT Serial2
+
 
 //LCD
 LiquidCrystal_I2C lcd (0x27, 16,2);
   
-    float voltage1, current1, power1, energy1, voltage2, current2, power2, energy2, acs_voltage, acs_current;
+float voltage1, current1, power1, energy1, voltage2, current2, power2, energy2, acs_voltage, acs_current;
     
 /*Put your SSID & Password*/
 const char* ssid = "Jem";  // Enter SSID here
@@ -24,9 +28,18 @@ const char* password = "jemerjaps";  //Enter Password here
 uint32_t tsLastReport = 0;
 
 WebServer server(80);             
+
+byte customAddressCommand[] = {0xF8, 0xC0, 0xA8, 0x01, 0x01, 0x00, 0x1E, 0x11, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
  
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
+  Serial2.begin(9600);
+ 
+  //initialize pzem modules with custom address
+  //pzem1.setAddress(customAddress1);
+  //pzem2.setAddress(customAddress2);
+  
   //wifi
   Serial.println("Connecting to ");
   Serial.println(ssid);
@@ -59,25 +72,79 @@ void setup() {
   
   //connect to your local wi-fi network
   WiFi.begin(ssid, password);
+
+  // Set custom address for PZEM2
+  //setAddressPZEM2();
 }
 
 void loop() {
   server.handleClient();
+  //debugging purposes
+  if (Serial2.available() > 0) {
+     //Read the incoming byte from Serial2
+    char incomingByte = Serial2.read();
+    
+     //Print the received byte for debugging
+    Serial.print("Received byte on Serial2: ");
+    Serial.println(incomingByte);
+  }
+  
   if (millis() - tsLastReport > REPORTING_PERIOD_MS) 
   {
-    Serial.print("Custom Address:");
-    Serial.println(pzem1.readAddress(), HEX);
-    Serial2.println(pzem2.readAddress(), HEX);
+    
+    //acs712 sensor
+   int adc = analogRead(A6); //gpio34
+   acs_voltage= map(adc, 0, 1023, -5  ,5);
+   acs_current = ((acs_voltage-2.5)/0.185);
+   Serial.print("Battery Voltage: ");
+   Serial.println(acs_voltage);
+   Serial.print("Battery Current: ");
+   Serial.println(acs_current);
+   Serial.println();
+   delay(1000);
 
+   lcd.setCursor (0, 0);
+    lcd.print (acs_current);
+    lcd.print (" A ");
+    //Here cursor is placed on first position (col: 0) of the second line (row: 1) 
+    lcd.setCursor (0, 1);
+    lcd.print (acs_voltage);
+    lcd.print (" V ");
+    delay (1000);
 
-    // Read the data from the pzem1
-    voltage1 = pzem1.voltage();      voltage2 = pzem2.voltage();
-    current1 = pzem1.current();      current2 = pzem2.current();
-    power1 = pzem1.power();          power2 = pzem2.power();
-    energy1 = pzem1.energy();        energy2 = pzem2.energy();
+    static uint8_t customAddress1 = 0xF8; // custom address for the first PZEM module
+    static uint8_t customAddress2 = 0xF9; // custom address for the second PZEM module
+    Serial.print("Custom Address for PZEM1: ");
+    Serial.println(pzem1.getAddress(), HEX);
+    Serial.print("Previous Custom Address for PZEM2: ");
+    Serial.println(pzem2.getAddress(), HEX);
+    Serial.print("Setting Custom Address for PZEM2 to: ");
+    Serial.println(customAddress2, HEX);
+    if(!pzem2.setAddress(customAddress2))
+    {
+      // Setting custom address failed. Probably no PZEM connected
+      Serial.println("ERROR SETTING ADDRESS FOR PZEM 2");
+    } else {
+      // Print out the new custom address
+      Serial.print("Current address:    0x");
+      Serial.println(pzem2.readAddress(), HEX);
+      Serial.println();
+    }
+    
+
+    // Read the data from the pzem1 and pzem2
+    voltage1 = pzem1.voltage();      
+    voltage2 = pzem2.voltage();
+    current1 = pzem1.current();      
+    current2 = pzem2.current();
+    power1 = pzem1.power();         
+    power2 = pzem2.power();
+    energy1 = pzem1.energy();        
+    energy2 = pzem2.energy();
 
     // Check if the data1 is valid
     if(isnan(voltage1)){
+        Serial.println();
         Serial.println("Error reading Inverter voltage");
     } else if (isnan(current1)) {
         Serial.println("Error reading Inverter current");
@@ -88,52 +155,36 @@ void loop() {
     } else {
 
         // Print the values to the Serial console
-        Serial.print("Inverter Voltage: ");      Serial.print(voltage1);      Serial.println("V");
-        Serial.print("Inverter Current: ");      Serial.print(current1);      Serial.println("A");
-        Serial.print("Inverter Power: ");        Serial.print(power1);        Serial.println("W");
-        Serial.print("Inverter Energy: ");       Serial.print(energy1,3);     Serial.println("kWh");
+        Serial.print("Inverter Voltage: ");      Serial.print(voltage1);      Serial.println("V"); delay(500);
+        Serial.print("Inverter Current: ");      Serial.print(current1);      Serial.println("A"); delay(500);
+        Serial.print("Inverter Power: ");        Serial.print(power1);        Serial.println("W"); delay(500);
+        Serial.print("Inverter Energy: ");       Serial.print(energy1,3);     Serial.println("kWh"); delay(500);
 
     }
 
      // Check if the data2 is valid
     if(isnan(voltage2)){
-        Serial2.println("Error reading Load voltage");
+        Serial.println();
+        Serial.println("Error reading Load voltage");
     } else if (isnan(current2)) {
-        Serial2.println("Error reading Load current");
+        Serial.println("Error reading Load current");
     } else if (isnan(power2)) {
-        Serial2.println("Error reading Load power");
+        Serial.println("Error reading Load power");
     } else if (isnan(energy2)) {
-        Serial2.println("Error reading Load energy");
+        Serial.println("Error reading Load energy");
     } else {
 
         // Print the values to the Serial console
-        Serial2.print("Load Voltage: ");      Serial2.print(voltage2);      Serial2.println("V");
-        Serial2.print("Load Current: ");      Serial2.print(current2);      Serial2.println("A");
-        Serial2.print("Load Power: ");        Serial2.print(power2);        Serial2.println("W");
-        Serial2.print("Load Energy: ");       Serial2.print(energy2,3);     Serial2.println("kWh");
+        Serial.print("Load Voltage: ");      Serial.print(voltage2);      Serial.println("V");
+        Serial.print("Load Current: ");      Serial.print(current2);      Serial.println("A");
+        Serial.print("Load Power: ");        Serial.print(power2);        Serial.println("W");
+        Serial.print("Load Energy: ");       Serial.print(energy2,3);     Serial.println("kWh");
 
     }
     Serial.println();
     delay(2000);
     
-//acs712 sensor
-  int adc = analogRead(A6); //gpio34
-  acs_voltage= map(adc, 0, 1023, -5  ,5);
-  acs_current = ((acs_voltage-2.5)/0.185);
-  Serial.print("Battery Voltage: ");
-  Serial.println(acs_voltage);
-  Serial.print("Battery Current: ");
-  Serial.println(acs_current);
-  delay(1000);
 
-  lcd.setCursor (0, 0);
-  lcd.print (acs_current);
-  lcd.print (" A ");
-  //Here cursor is placed on first position (col: 0) of the second line (row: 1) 
-  lcd.setCursor (0, 1);
-  lcd.print (acs_voltage);
-  lcd.print (" V ");
-  delay (1000);
     
     Serial.println("*********************************");
     Serial.println();
@@ -142,6 +193,41 @@ void loop() {
   }
   
 }
+
+void setAddressPZEM2() {
+  // Send the custom address command bytes to PZEM2
+  Serial.println("Sending custom address command to PZEM2...");
+  for (int i = 0; i < sizeof(customAddressCommand); i++) {
+    Serial2.write(customAddressCommand[i]);
+    Serial.print("Sent byte: ");
+    Serial.println(customAddressCommand[i], HEX);
+  }
+  delay(5000); // Wait for PZEM2 to process the command
+
+  // Read the address from PZEM2
+  Serial.println("Waiting for response from PZEM2...");
+  byte addressBuffer[6];
+  int bytesReceived = 0;
+  while (bytesReceived < 6) {
+    if (Serial2.available()) {
+      addressBuffer[bytesReceived] = Serial2.read();
+      Serial.print("Received byte from PZEM2: ");
+      Serial.println(addressBuffer[bytesReceived], HEX);
+      bytesReceived++;
+    }
+  }
+
+  // Display the new address
+  Serial.print("New Address for PZEM2: ");
+  for (int i = 0; i < 6; i++) {
+    Serial.print(addressBuffer[i], HEX);
+    if (i < 5) {
+      Serial.print(":");
+    }
+  }
+  Serial.println();
+}
+
  
 void handle_OnConnect() {
   server.send(200, "text/html", SendHTML(voltage1, current1, power1, energy1)); 
@@ -151,15 +237,16 @@ void handle_NotFound(){
   server.send(404, "text/plain", "Not found");
 }
  
-  String SendHTML(float voltage1,float current1,float power1,float energy1){
+String SendHTML(float voltage1,float current1,float power1,float energy1){
   String ptr = "<!DOCTYPE html>";
+  ptr +="<link rel=\"icon\" href=\"data:,\">";
   ptr +="<html>";
   ptr +="<head>";
   ptr +="<title>ESP32 Monitoring</title>";
-  ptr +="<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  ptr +="<meta name='viewport' content='width=device-width, initial-scale=1\'>";
   ptr +="<link href='https://fonts.googleapis.com/css?family=Open+Sans:300,400,600' rel='stylesheet'>";
   ptr +="<style>";
-  ptr +="html { font-family: 'Open Sans', sans-serif; display: block; margin: 0px auto; text-align: center;color: #444444;}";
+  ptr +="html { font-family: 'Helvetica'; display: inline-block; margin: 0px auto; text-align: center;color: #444444;}";
   ptr +="body{margin: 0px;} ";
   ptr +="h1 {margin: 50px auto 30px;} ";
   ptr +=".side-by-side{display: table-cell;vertical-align: middle;position: relative;}";
@@ -242,7 +329,36 @@ void handle_NotFound(){
   ptr +="<div class='side-by-side text'>kWh</div>";
   ptr +="</div>";
  
- 
+  ptr +="<h3>Battery Readings</h3>";
+  ptr +="<div class='container'>";
+  
+  ptr +="<div class='data acs_voltage'>";
+  ptr +="<div class='side-by-side icon'>";
+  ptr +="<svg enable-background='new 0 0 19.438 54.003'height=54.003px id=Layer_1 version=1.1 viewBox='0 0 19.438 54.003'width=19.438px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><g><path d='M11.976,8.82v-2h4.084V6.063C16.06,2.715,13.345,0,9.996,0H9.313C5.965,0,3.252,2.715,3.252,6.063v30.982";
+  ptr +="C1.261,38.825,0,41.403,0,44.286c0,5.367,4.351,9.718,9.719,9.718c5.368,0,9.719-4.351,9.719-9.718";
+  ptr +="c0-2.943-1.312-5.574-3.378-7.355V18.436h-3.914v-2h3.914v-2.808h-4.084v-2h4.084V8.82H11.976z M15.302,44.833";
+  ptr +="c0,3.083-2.5,5.583-5.583,5.583s-5.583-2.5-5.583-5.583c0-2.279,1.368-4.236,3.326-5.104V24.257C7.462,23.01,8.472,22,9.719,22";
+  ptr +="s2.257,1.01,2.257,2.257V39.73C13.934,40.597,15.302,42.554,15.302,44.833z'fill=#F29C21 /></g></svg>";
+  ptr +="</div>";
+  ptr +="<div class='side-by-side text'>Battery Voltage</div>";
+  ptr +="<div class='side-by-side reading'>";
+  ptr +=(int)acs_voltage;
+  ptr +="<div class='side-by-side text'>V</div>";
+  ptr +="</div>";
+  
+  ptr +="<div class='data acs_current'>";
+  ptr +="<div class='side-by-side icon'>";
+  ptr +="<svg enable-background='new 0 0 29.235 40.64'height=20.64px id=Layer_1 version=1.1 viewBox='0 0 29.235 40.64'width=10.235px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><path d='M14.618,0C14.618,0,0,17.95,0,26.022C0,34.096,6.544,40.64,14.618,40.64s14.617-6.544,14.617-14.617";
+  ptr +="C29.235,17.95,14.618,0,14.618,0z M13.667,37.135c-5.604,0-10.162-4.56-10.162-10.162c0-0.787,0.638-1.426,1.426-1.426";
+  ptr +="c0.787,0,1.425,0.639,1.425,1.426c0,4.031,3.28,7.312,7.311,7.312c0.787,0,1.425,0.638,1.425,1.425";
+  ptr +="C15.093,36.497,14.455,37.135,13.667,37.135z'fill=#3C97D3 /></svg>";
+  ptr +="</div>";
+  ptr +="<div class='side-by-side text'>Inverter current</div>";
+  ptr +="<div class='side-by-side reading'>";
+  ptr +=(int)acs_current;
+  ptr +="<div class='side-by-side text'>A</div>";
+  ptr +="</div>";
+  
   ptr +="</div>";
   ptr +="</body>";
   ptr +="</html>";
