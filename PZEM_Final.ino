@@ -29,7 +29,7 @@ uint32_t tsLastReport = 0;
 
 WebServer server(80);             
 
-byte customAddressCommand[] = {0xF8, 0xC0, 0xA8, 0x01, 0x01, 0x00, 0x1E, 0x11, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+byte customAddressCommand[] = {0xF9, 0x06, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00};
 
  
 void setup() {
@@ -74,7 +74,7 @@ void setup() {
   WiFi.begin(ssid, password);
 
   // Set custom address for PZEM2
-  //setAddressPZEM2();
+  setAddressPZEM2();
 }
 
 void loop() {
@@ -127,7 +127,7 @@ void loop() {
     } else {
       // Print out the new custom address
       Serial.print("Current address:    0x");
-      Serial.println(pzem2.readAddress(), HEX);
+      Serial.println(pzem2.getAddress(), HEX);
       Serial.println();
     }
     
@@ -195,6 +195,16 @@ void loop() {
 }
 
 void setAddressPZEM2() {
+  // Modify the custom address command to change the address from 0xF8 to 0xF9
+  //customAddressCommand[0] = 0xF9;
+
+  //calculate CRC
+   unsigned int crc = calculateCRC(customAddressCommand, sizeof(customAddressCommand));
+
+  // Append CRC to the command
+  customAddressCommand[sizeof(customAddressCommand) - 2] = crc >> 8; // High byte
+  customAddressCommand[sizeof(customAddressCommand) - 1] = crc & 0xFF; // Low byte
+  
   // Send the custom address command bytes to PZEM2
   Serial.println("Sending custom address command to PZEM2...");
   for (int i = 0; i < sizeof(customAddressCommand); i++) {
@@ -210,7 +220,7 @@ void setAddressPZEM2() {
   int bytesReceived = 0;
   while (bytesReceived < 6) {
     if (Serial2.available()) {
-      addressBuffer[bytesReceived] = Serial2.read();
+      addressBuffer[bytesReceived] = Serial.read();
       Serial.print("Received byte from PZEM2: ");
       Serial.println(addressBuffer[bytesReceived], HEX);
       bytesReceived++;
@@ -228,6 +238,22 @@ void setAddressPZEM2() {
   Serial.println();
 }
 
+// Function to calculate CRC
+unsigned int calculateCRC(byte *data, int length) {
+  unsigned int crc = 0xFFFF;
+  for (int i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (int j = 0; j < 8; j++) {
+      if (crc & 0x0001) {
+        crc >>= 1;
+        crc ^= 0xA001;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  return crc;
+}
  
 void handle_OnConnect() {
   server.send(200, "text/html", SendHTML(voltage1, current1, power1, energy1)); 
