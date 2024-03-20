@@ -9,6 +9,7 @@
 #define HardwareSerial
 
 //pzem sensor pins
+
 PZEM004Tv30 pzem1(&Serial, 3,1); // UART0 (Serial0) on pins 3 (RX) and 1 (TX)
 PZEM004Tv30 pzem2(&Serial2, 16,17); // UART2 (Serial2) on pins 16 (RX) and 17 (TX)
 
@@ -19,7 +20,7 @@ PZEM004Tv30 pzem2(&Serial2, 16,17); // UART2 (Serial2) on pins 16 (RX) and 17 (T
 //LCD
 LiquidCrystal_I2C lcd (0x27, 16,2);
   
-float voltage1, current1, power1, energy1, voltage2, current2, power2, energy2, acs_voltage, acs_current;
+char voltage1, current1, power1, energy1, voltage2, current2, power2, energy2, acs_voltage, acs_current;
     
 /*Put your SSID & Password*/
 const char* ssid = "Jem";  // Enter SSID here
@@ -74,7 +75,7 @@ void setup() {
   WiFi.begin(ssid, password);
 
   // Set custom address for PZEM2
-  setAddressPZEM2();
+  //setAddressPZEM2();
 }
 
 void loop() {
@@ -87,6 +88,7 @@ void loop() {
      //Print the received byte for debugging
     Serial.print("Received byte on Serial2: ");
     Serial.println(incomingByte);
+    delay(500);
   }
   
   if (millis() - tsLastReport > REPORTING_PERIOD_MS) 
@@ -120,6 +122,10 @@ void loop() {
     Serial.println(pzem2.getAddress(), HEX);
     Serial.print("Setting Custom Address for PZEM2 to: ");
     Serial.println(customAddress2, HEX);
+
+    //setAddressPZEM2();
+    pzem2.setAddress(0xF9);
+    
     if(!pzem2.setAddress(customAddress2))
     {
       // Setting custom address failed. Probably no PZEM connected
