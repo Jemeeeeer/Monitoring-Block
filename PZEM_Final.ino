@@ -1,398 +1,549 @@
-#include <WiFi.h>
-#include <WebServer.h>
-#include <Wire.h>
-#include <WiFiClient.h>
-#include <PZEM004Tv30.h> //pzem library
-#include <LiquidCrystal_I2C.h> //LCD library
+// Include necessary libraries
+#include "WiFi.h"
+#include "ESPAsyncWebServer.h"
+#include <PZEM004Tv30.h>
+#include <LiquidCrystal_I2C.h>
 
-#define REPORTING_PERIOD_MS 1000
-#define HardwareSerial
+//Define Threshold for voltages and current
+#define Batt_Disconnect_Voltage 24.5 
+#define Batt_Reconnect_Voltage 27.0
+#define Min_Batt_Current 0.0
 
-//pzem sensor pins
+//Define POWERSWITCHING Pins
+#define BATTERY_PIN 25 //Change as needed.
+#define MAINS_PIN 26 //Change as needed.
 
-PZEM004Tv30 pzem1(&Serial, 3,1); // UART0 (Serial0) on pins 3 (RX) and 1 (TX)
-PZEM004Tv30 pzem2(&Serial2, 16,17); // UART2 (Serial2) on pins 16 (RX) and 17 (TX)
+// Define PZEM pins and serial interface
+#define PZEM_RX_PIN 16
+#define PZEM_TX_PIN 17
+#define PZEM_SERIAL Serial2
 
-//#define SERIAL_PORT Serial
-//#define SERIAL2_PORT Serial2
+// Create PZEM instance
+PZEM004Tv30 pzem1(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x55); //inverter 
+PZEM004Tv30 pzem2(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x56); //mains
+PZEM004Tv30 pzem3(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x58); //load
 
 
-//LCD
-LiquidCrystal_I2C lcd (0x27, 16,2);
-  
-char voltage1, current1, power1, energy1, voltage2, current2, power2, energy2, acs_voltage, acs_current;
-    
-/*Put your SSID & Password*/
-const char* ssid = "Jem";  // Enter SSID here
-const char* password = "jemerjaps";  //Enter Password here
+double VRMS = 0;
+double AmpsRMS = 0;
+float getVoltage();
+float getCurrent(); 
+float getVPP(); 
 
-uint32_t tsLastReport = 0;
+//Collect Data from Sensors
+void collectdata(float battData[], float InverterData[], float MainsData[], float LoadData[]) {
+  //Battery Data
+  battData[0] = getVPP();
+  battData[1] = getCurrent();
 
-WebServer server(80);             
+  //Inverter Data
+  InverterData[0] = pzem1.voltage();
+  InverterData[1] = pzem1.current();
+  InverterData[2] = pzem1.power();
+  InverterData[3] = pzem1.energy();
 
-byte customAddressCommand[] = {0xF9, 0x06, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00};
+  //AC Main Line Data
+  MainsData[0] = pzem2.voltage();
+  MainsData[1] = pzem2.current();
+  MainsData[2] = pzem2.power();
+  MainsData[3] = pzem2.energy();
 
- 
-void setup() {
-  Serial.begin(9600);
-  Serial2.begin(9600);
- 
-  //initialize pzem modules with custom address
-  //pzem1.setAddress(customAddress1);
-  //pzem2.setAddress(customAddress2);
-  
-  //wifi
-  Serial.println("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { //check if wifi is connected
-    delay(1000);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected..!");
-  Serial.print("Got IP: ");  
-  Serial.println(WiFi.localIP());
-  
-  server.on("/", handle_OnConnect);
-  server.onNotFound(handle_NotFound);
- 
-  server.begin();
-  Serial.println("HTTP server started");
+ //Connected Load Data
+  LoadData[0] = pzem3.voltage();
+  LoadData[1] = pzem3.current();
+  LoadData[2] = pzem3.power();
+  LoadData[3] = pzem3.energy();
 
-  //acs on lcd
-  Serial.println ("ACS712 current sensor"); 
-  lcd.init();
-  lcd.backlight();
-  lcd.print ("ACS712 current");
-  lcd.setCursor (0, 1);
-  lcd.print ("sensor");
-  delay(1000);
-  lcd.clear(); 
- 
-  
-  //connect to your local wi-fi network
-  WiFi.begin(ssid, password);
-
-  // Set custom address for PZEM2
-  //setAddressPZEM2();
 }
 
-void loop() {
-  server.handleClient();
-  //debugging purposes
-  if (Serial2.available() > 0) {
-     //Read the incoming byte from Serial2
-    char incomingByte = Serial2.read();
-    
-     //Print the received byte for debugging
-    Serial.print("Received byte on Serial2: ");
-    Serial.println(incomingByte);
-    delay(500);
-  }
+//Determine Which PowerSource to use
+//Currently only checking Voltage. Subject to change.
+String selectpowersource(float battData[],float InvData[],float MainsData[],float LoadData[]){
+  //assign data to variables
+  float battvolt = battData[0];
+  float battcur = battData[1];
   
-  if (millis() - tsLastReport > REPORTING_PERIOD_MS) 
-  {
-    
-    //acs712 sensor
-   int adc = analogRead(A6); //gpio34
-   acs_voltage= map(adc, 0, 1023, -5  ,5);
-   acs_current = ((acs_voltage-2.5)/0.185);
-   Serial.print("Battery Voltage: ");
-   Serial.println(acs_voltage);
-   Serial.print("Battery Current: ");
-   Serial.println(acs_current);
-   Serial.println();
-   delay(1000);
-
-   lcd.setCursor (0, 0);
-    lcd.print (acs_current);
-    lcd.print (" A ");
-    //Here cursor is placed on first position (col: 0) of the second line (row: 1) 
-    lcd.setCursor (0, 1);
-    lcd.print (acs_voltage);
-    lcd.print (" V ");
-    delay (1000);
-
-    static uint8_t customAddress1 = 0xF8; // custom address for the first PZEM module
-    static uint8_t customAddress2 = 0xF9; // custom address for the second PZEM module
-    Serial.print("Custom Address for PZEM1: ");
-    Serial.println(pzem1.getAddress(), HEX);
-    Serial.print("Previous Custom Address for PZEM2: ");
-    Serial.println(pzem2.getAddress(), HEX);
-    Serial.print("Setting Custom Address for PZEM2 to: ");
-    Serial.println(customAddress2, HEX);
-
-    //setAddressPZEM2();
-    pzem2.setAddress(0xF9);
-    
-    if(!pzem2.setAddress(customAddress2))
-    {
-      // Setting custom address failed. Probably no PZEM connected
-      Serial.println("ERROR SETTING ADDRESS FOR PZEM 2");
-    } else {
-      // Print out the new custom address
-      Serial.print("Current address:    0x");
-      Serial.println(pzem2.getAddress(), HEX);
-      Serial.println();
-    }
-    
-
-    // Read the data from the pzem1 and pzem2
-    voltage1 = pzem1.voltage();      
-    voltage2 = pzem2.voltage();
-    current1 = pzem1.current();      
-    current2 = pzem2.current();
-    power1 = pzem1.power();         
-    power2 = pzem2.power();
-    energy1 = pzem1.energy();        
-    energy2 = pzem2.energy();
-
-    // Check if the data1 is valid
-    if(isnan(voltage1)){
-        Serial.println();
-        Serial.println("Error reading Inverter voltage");
-    } else if (isnan(current1)) {
-        Serial.println("Error reading Inverter current");
-    } else if (isnan(power1)) {
-        Serial.println("Error reading Inverter power");
-    } else if (isnan(energy1)) {
-        Serial.println("Error reading Inverter energy");
-    } else {
-
-        // Print the values to the Serial console
-        Serial.print("Inverter Voltage: ");      Serial.print(voltage1);      Serial.println("V"); delay(500);
-        Serial.print("Inverter Current: ");      Serial.print(current1);      Serial.println("A"); delay(500);
-        Serial.print("Inverter Power: ");        Serial.print(power1);        Serial.println("W"); delay(500);
-        Serial.print("Inverter Energy: ");       Serial.print(energy1,3);     Serial.println("kWh"); delay(500);
-
-    }
-
-     // Check if the data2 is valid
-    if(isnan(voltage2)){
-        Serial.println();
-        Serial.println("Error reading Load voltage");
-    } else if (isnan(current2)) {
-        Serial.println("Error reading Load current");
-    } else if (isnan(power2)) {
-        Serial.println("Error reading Load power");
-    } else if (isnan(energy2)) {
-        Serial.println("Error reading Load energy");
-    } else {
-
-        // Print the values to the Serial console
-        Serial.print("Load Voltage: ");      Serial.print(voltage2);      Serial.println("V");
-        Serial.print("Load Current: ");      Serial.print(current2);      Serial.println("A");
-        Serial.print("Load Power: ");        Serial.print(power2);        Serial.println("W");
-        Serial.print("Load Energy: ");       Serial.print(energy2,3);     Serial.println("kWh");
-
-    }
-    Serial.println();
-    delay(2000);
-    
-
-    
-    Serial.println("*********************************");
-    Serial.println();
- 
-    tsLastReport = millis();
-  }
+  float invvolt = InvData[0];
+  float invcur = InvData[1];
+  float invpow = InvData[2];
+  float invene= InvData[3];
   
-}
+  float mainsvolt = MainsData[0];
+  float mainscur = MainsData[1];
+  float mainspow = MainsData[2];
+  float mainsene = MainsData[3];
 
-void setAddressPZEM2() {
-  // Modify the custom address command to change the address from 0xF8 to 0xF9
-  //customAddressCommand[0] = 0xF9;
+  float loadvolt =LoadData[0];
+  float loadcur = LoadData[1];
+  float loadpow = LoadData[2];
+  float loadene = LoadData[3];
 
-  //calculate CRC
-   unsigned int crc = calculateCRC(customAddressCommand, sizeof(customAddressCommand));
+  String static battstate = "connected";
 
-  // Append CRC to the command
-  customAddressCommand[sizeof(customAddressCommand) - 2] = crc >> 8; // High byte
-  customAddressCommand[sizeof(customAddressCommand) - 1] = crc & 0xFF; // Low byte
-  
-  // Send the custom address command bytes to PZEM2
-  Serial.println("Sending custom address command to PZEM2...");
-  for (int i = 0; i < sizeof(customAddressCommand); i++) {
-    Serial2.write(customAddressCommand[i]);
-    Serial.print("Sent byte: ");
-    Serial.println(customAddressCommand[i], HEX);
-  }
-  delay(5000); // Wait for PZEM2 to process the command
-
-  // Read the address from PZEM2
-  Serial.println("Waiting for response from PZEM2...");
-  byte addressBuffer[6];
-  int bytesReceived = 0;
-  while (bytesReceived < 6) {
-    if (Serial2.available()) {
-      addressBuffer[bytesReceived] = Serial.read();
-      Serial.print("Received byte from PZEM2: ");
-      Serial.println(addressBuffer[bytesReceived], HEX);
-      bytesReceived++;
+  //begin decision logic
+  // If battery between Reconnect/Disconnect Voltages
+  if  (battvolt > Batt_Disconnect_Voltage && battvolt < Batt_Reconnect_Voltage){
+    //If Battery is Connected use battery, else check Mains. 
+    if (battstate == "connected"){
+      return "Battery";
     }
-  }
-
-  // Display the new address
-  Serial.print("New Address for PZEM2: ");
-  for (int i = 0; i < 6; i++) {
-    Serial.print(addressBuffer[i], HEX);
-    if (i < 5) {
-      Serial.print(":");
-    }
-  }
-  Serial.println();
-}
-
-// Function to calculate CRC
-unsigned int calculateCRC(byte *data, int length) {
-  unsigned int crc = 0xFFFF;
-  for (int i = 0; i < length; i++) {
-    crc ^= data[i];
-    for (int j = 0; j < 8; j++) {
-      if (crc & 0x0001) {
-        crc >>= 1;
-        crc ^= 0xA001;
-      } else {
-        crc >>= 1;
+    else if (battstate == "disconnected"){
+      if (mainsvolt != 0){
+        return "Mains";
+      } 
+    else{
+        return "NoSource";
       }
     }
   }
-  return crc;
+  // Disconnect Battery 
+  if (battvolt <= Batt_Disconnect_Voltage){
+    battstate = "disconnected";
+    if (mainsvolt != 0){
+        return "Mains";
+      } 
+    else{
+        return "NoSource";
+      }
+  }
+  //Reconnect Battery
+  if (battvolt >= Batt_Reconnect_Voltage){
+    battstate = "connected";
+    return "Battery";
+  }
+  return "Error Selecting Source"; // Return "Unknown" if none of the conditions are met
 }
- 
-void handle_OnConnect() {
-  server.send(200, "text/html", SendHTML(voltage1, current1, power1, energy1)); 
+
+void SwitchPower(String selectedpowersource){
+  if (selectedpowersource == "Battery"){
+    digitalWrite(BATTERY_PIN, HIGH); // Turn on battery
+    digitalWrite(MAINS_PIN, LOW);    // Turn off mains
+  }
+  else if (selectedpowersource == "Mains"){
+    digitalWrite(BATTERY_PIN, LOW); // Turn off battery
+    digitalWrite(MAINS_PIN, HIGH);    // Turn on mains
+  }
+  else {
+    digitalWrite(BATTERY_PIN, LOW); // Turn off battery
+    digitalWrite(MAINS_PIN, LOW);    // Turn off mains
+  }
 }
- 
-void handle_NotFound(){
-  server.send(404, "text/plain", "Not found");
+
+//LCD declaration
+LiquidCrystal_I2C lcd (0x27, 16,2); 
+
+// ACS712 Declarations
+const int sensorIn = 34;      // pin where the OUT pin from sensor is connected on Arduino
+int mVperAmp = 100;           // this the 5A version of the ACS712 -use 100 for 20A Module and 66 for 30A Module
+int Watt = 0;
+double Voltage = 0;
+double Current =0;
+
+
+// WiFi credentials
+const char* ssid = "Jem";
+const char* password = "jemerjaps";
+
+
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 0;
+const int   daylightOffset_sec = 3600;
+
+
+// Create AsyncWebServer instance
+AsyncWebServer server(80);
+
+// HTML document with CSS and JS 
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Smart Home Monitoring</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    canvas {
+      -moz-user-select: none;
+      -webkit-user-select: none;
+      -ms-user-select: none;
+    }
+  
+    /* Data Table Styling */
+    #dataTable {
+      font-family: "Trebuchet MS", Arial, Helvetica, sans-serif;
+      border-collapse: collapse;
+      width: 95%;
+      margin-top: 40px;
+      text-align: center;
+    }
+
+    #dataTable td,
+    #dataTable th {
+      border: 1px solid #ddd;
+      padding: 8px;
+      font-size: 18px; /* Increase font size */
+      font-weight: bold; /* Make it bold */
+    }
+
+    #dataTable tr:nth-child(even) {
+      background-color: #659EC7;
+    }
+
+    #dataTable tr:nth-child(odd) {
+      background-color: #95B9C7;
+    }
+
+    #dataTable td:hover {
+      background-color: #ddd;
+    }
+
+    #dataTable th {
+      padding-top: 12px;
+      padding-bottom: 12px;
+      text-align: center;
+      background-color: #151B54;
+      color: white;
+    }
+    .button {
+      display: inline-block;
+      border-radius: 4px;
+      background-color: #e7e7e7;
+      border: none;
+      color: black;
+      text-align: center;
+      font-size: 15px;
+      padding: 6px;
+      width: 100px;
+      transition: all 0.5s;
+      cursor: pointer;
+      margin: 30px;
+      border: 1px solid black;
 }
- 
-String SendHTML(float voltage1,float current1,float power1,float energy1){
-  String ptr = "<!DOCTYPE html>";
-  ptr +="<link rel=\"icon\" href=\"data:,\">";
-  ptr +="<html>";
-  ptr +="<head>";
-  ptr +="<title>ESP32 Monitoring</title>";
-  ptr +="<meta name='viewport' content='width=device-width, initial-scale=1\'>";
-  ptr +="<link href='https://fonts.googleapis.com/css?family=Open+Sans:300,400,600' rel='stylesheet'>";
-  ptr +="<style>";
-  ptr +="html { font-family: 'Helvetica'; display: inline-block; margin: 0px auto; text-align: center;color: #444444;}";
-  ptr +="body{margin: 0px;} ";
-  ptr +="h1 {margin: 50px auto 30px;} ";
-  ptr +=".side-by-side{display: table-cell;vertical-align: middle;position: relative;}";
-  ptr +=".text{font-weight: 600;font-size: 19px;width: 200px;}";
-  ptr +=".reading{font-weight: 300;font-size: 50px;padding-right: 25px;}";
-  ptr +=".temperature .reading{color: #F29C1F;}";
-  ptr +=".humidity .reading{color: #3B97D3;}";
-  ptr +=".BPM .reading{color: #FF0000;}";
-  ptr +=".SpO2 .reading{color: #955BA5;}";
-  ptr +=".bodytemperature .reading{color: #F29C1F;}";
-  ptr +=".superscript{font-size: 17px;font-weight: 600;position: absolute;top: 10px;}";
-  ptr +=".data{padding: 10px;}";
-  ptr +=".container{display: table;margin: 0 auto;}";
-  ptr +=".icon{width:65px}";
-  ptr +="</style>";
-  ptr +="</head>";
-  ptr +="<body>";
-  ptr +="<h1>ESP32 Monitoring</h1>";
-  ptr +="<h3>Inverter Readings</h3>";
-  ptr +="<div class='container'>";
+
+  .button-container span {
+      cursor: pointer;
+      display: inline-block;
+      position: relative;
+      transition: 0.5s;
+  }
+
+  .button-container span:after {
+    content: '\00bb';
+    position: absolute;
+    opacity: 0;
+    top: 0;
+    right: -20px;
+    transition: 0.5s; 
+  }
+
+  .button-container:hover span {
+    padding-right: 25px;
+  }
+
+  .button-container:hover span:after {
+    opacity: 1;
+    right: 0;
+  }
+  </style>
+</head>
+
+<body style="background-color: #242424;">
+  <div style="text-align:center; color: #0492C2; font-family: sans-serif; font-size:300%; font-weight: bold;">SMART HOME MONITOR</div>
+
+  <div class="button-container">
+        <button class="button" onclick="redirectToHost()"><< HOME</button>
+  </div>
   
-  ptr +="<div class='data voltage'>";
-  ptr +="<div class='side-by-side icon'>";
-  ptr +="<svg enable-background='new 0 0 19.438 54.003'height=54.003px id=Layer_1 version=1.1 viewBox='0 0 19.438 54.003'width=19.438px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><g><path d='M11.976,8.82v-2h4.084V6.063C16.06,2.715,13.345,0,9.996,0H9.313C5.965,0,3.252,2.715,3.252,6.063v30.982";
-  ptr +="C1.261,38.825,0,41.403,0,44.286c0,5.367,4.351,9.718,9.719,9.718c5.368,0,9.719-4.351,9.719-9.718";
-  ptr +="c0-2.943-1.312-5.574-3.378-7.355V18.436h-3.914v-2h3.914v-2.808h-4.084v-2h4.084V8.82H11.976z M15.302,44.833";
-  ptr +="c0,3.083-2.5,5.583-5.583,5.583s-5.583-2.5-5.583-5.583c0-2.279,1.368-4.236,3.326-5.104V24.257C7.462,23.01,8.472,22,9.719,22";
-  ptr +="s2.257,1.01,2.257,2.257V39.73C13.934,40.597,15.302,42.554,15.302,44.833z'fill=#F29C21 /></g></svg>";
-  ptr +="</div>";
-  ptr +="<div class='side-by-side text'>Inverter Voltage</div>";
-  ptr +="<div class='side-by-side reading'>";
-  ptr +=(int)voltage1;
-  ptr +="<div class='side-by-side text'>V</div>";
-  ptr +="</div>";
+  <div style="margin-top: 20px; margin: 0 auto; width: 0 auto;">
+    <table id="dataTable" style="margin: 0 auto;">
+      <tr>
+        <th> </th>
+        <th>Mains</th>
+        <th>Inverter</th>
+        <th>Load</th>
+        <th>Battery</th>
+      </tr>
+      <tr>
+        <th>Voltage</th>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+      </tr>
+      <tr>
+        <th>Current</th>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+      </tr>
+      <tr>
+        <th>Energy</th>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+      </tr>
+      <tr>
+        <th>Power</th>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+        <td> </td>
+      </tr>
+    </table>
+  </div>
+  <br>
+  <br>
+
+  <script>
+    // Function to update sensor data from ESP32
+    function updateSensorData() {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            if (this.readyState == 4 && this.status == 200){
+          var data = JSON.parse(this.responseText);
+          // Update table data
+          document.getElementById("dataTable").innerHTML = `
+            <tr>
+              <th> </th>
+              <th>Mains</th>
+              <th>Inverter</th>
+              <th>Load</th>
+              <th>Battery</th>
+            </tr>
+            <tr>
+              <th>Voltage</th>
+              <td>${data.inverterVoltage.toFixed(2)} V</td>
+              <td>${data.mainsVoltage.toFixed(2)} V</td>
+              <td>${data.loadVoltage.toFixed(2)} V</td>
+              <td>${data.batteryVoltage.toFixed(2)} V</td>
+            </tr>
+            <tr>
+              <th>Current</th>
+              <td>${data.inverterCurrent.toFixed(2)} A</td>
+              <td>${data.mainsCurrent.toFixed(2)} A</td>
+              <td>${data.loadCurrent.toFixed(2)} A</td>
+              <td>${data.batteryCurrent.toFixed(2)} A</td>
+            </tr>
+            <tr>
+              <th>Energy</th>
+              <td>${data.inverterEnergy.toFixed(2)} kWh</td>
+              <td>${data.mainsEnergy.toFixed(2)} kWh</td>
+              <td>${data.loadEnergy.toFixed(2)} kWh</td>
+              <td></td>
+            </tr>
+            <tr>
+              <th>Power</th>
+              <td>${data.inverterPower.toFixed(2)} W</td>
+              <td>${data.mainsPower.toFixed(2)} W</td>
+              <td>${data.loadPower.toFixed(2)} W</td>
+              <td></td>
+            </tr>
+          `;
+            }
+        };
+        xhttp.open("GET", "/data", true);
+        xhttp.send();
+    }
+
+    function updateDataTable(data) {
+      var table = document.getElementById("dataTable");
+      var row = table.insertRow(1); // Add after headings
+      var cell1 = row.insertCell(0);
+      var cell2 = row.insertCell(1);
+      var cell3 = row.insertCell(2);
+      cell1.innerHTML = getCurrentTime(); // You need to implement this function
+      cell2.innerHTML = data.batteryVoltage.toFixed(2) + " V";
+      cell3.innerHTML = data.batteryCurrent.toFixed(2) + " A";
+    }
+    
+    updateSensorData();
+    setInterval(updateSensorData, 1500); // Update every 1.5 seconds
   
-  ptr +="<div class='data current'>";
-  ptr +="<div class='side-by-side icon'>";
-  ptr +="<svg enable-background='new 0 0 29.235 40.64'height=40.64px id=Layer_1 version=1.1 viewBox='0 0 29.235 40.64'width=29.235px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><path d='M14.618,0C14.618,0,0,17.95,0,26.022C0,34.096,6.544,40.64,14.618,40.64s14.617-6.544,14.617-14.617";
-  ptr +="C29.235,17.95,14.618,0,14.618,0z M13.667,37.135c-5.604,0-10.162-4.56-10.162-10.162c0-0.787,0.638-1.426,1.426-1.426";
-  ptr +="c0.787,0,1.425,0.639,1.425,1.426c0,4.031,3.28,7.312,7.311,7.312c0.787,0,1.425,0.638,1.425,1.425";
-  ptr +="C15.093,36.497,14.455,37.135,13.667,37.135z'fill=#3C97D3 /></svg>";
-  ptr +="</div>";
-  ptr +="<div class='side-by-side text'>Inverter current</div>";
-  ptr +="<div class='side-by-side reading'>";
-  ptr +=(int)current1;
-  ptr +="<div class='side-by-side text'>A</div>";
-  ptr +="</div>";
+    
+    //On Page load show graphs
+    window.onload = function () {
+      console.log(new Date().toLocaleTimeString());
+      getData();
+      showGraph();
+    };
+
+    //Ajax script to get ADC voltage at every 5 Seconds 
+
+    setInterval(function () {
+      // Call a function repetitively with 5 Second interval
+      getData();
+    }, 5000);
+    
+    function redirectToHost() {
+        window.location.href = "http://172.20.10.12"; // Replace with actual IP address of the host
+    }
+  </script>
+</body>
+
+</html>
+
+)rawliteral";
+
+//  ACS Function
+float getVoltage()
+{
+  float result = 0.0;
+  int readValue = 0;                // value read from the sensor
   
-  ptr +="<div class='data power'>";
-  ptr +="<div class='side-by-side icon'>";
-  ptr +="<svg enable-background='new 0 0 40.542 40.541'height=40.541px id=Layer_1 version=1.1 viewBox='0 0 40.542 40.541'width=40.542px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><g><path d='M34.313,20.271c0-0.552,0.447-1,1-1h5.178c-0.236-4.841-2.163-9.228-5.214-12.593l-3.425,3.424";
-  ptr +="c-0.195,0.195-0.451,0.293-0.707,0.293s-0.512-0.098-0.707-0.293c-0.391-0.391-0.391-1.023,0-1.414l3.425-3.424";
-  ptr +="c-3.375-3.059-7.776-4.987-12.634-5.215c0.015,0.067,0.041,0.13,0.041,0.202v4.687c0,0.552-0.447,1-1,1s-1-0.448-1-1V0.25";
-  ptr +="c0-0.071,0.026-0.134,0.041-0.202C14.39,0.279,9.936,2.256,6.544,5.385l3.576,3.577c0.391,0.391,0.391,1.024,0,1.414";
-  ptr +="c-0.195,0.195-0.451,0.293-0.707,0.293s-0.512-0.098-0.707-0.293L5.142,6.812c-2.98,3.348-4.858,7.682-5.092,12.459h4.804";
-  ptr +="c0.552,0,1,0.448,1,1s-0.448,1-1,1H0.05c0.525,10.728,9.362,19.271,20.22,19.271c10.857,0,19.696-8.543,20.22-19.271h-5.178";
-  ptr +="C34.76,21.271,34.313,20.823,34.313,20.271z M23.084,22.037c-0.559,1.561-2.274,2.372-3.833,1.814";
-  ptr +="c-1.561-0.557-2.373-2.272-1.815-3.833c0.372-1.041,1.263-1.737,2.277-1.928L25.2,7.202L22.497,19.05";
-  ptr +="C23.196,19.843,23.464,20.973,23.084,22.037z'fill=#26B999 /></g></svg>";
-  ptr +="</div>";
-  ptr +="<div class='side-by-side text'>Inverter Power</div>";
-  ptr +="<div class='side-by-side reading'>";
-  ptr +=(int)power1;
-  ptr +="<div class='side-by-side text'>W</div>";
-  ptr +="</div>";
+   uint32_t start_time = millis();
+   while((millis()-start_time) < 1000) //sample for 1 Sec
+   {
+       readValue = analogRead(sensorIn);
+       Voltage = (readValue *(5/1023.0))-3.5; //Gets V
+       return Voltage;
+ }
+}
+
+float getCurrent() {
+  float current_voltage = getVoltage();
+  float acs_current = ((current_voltage) / 0.1); //0.185V/A is the sensitivity of the ACS712
+  return acs_current;
+}
+
+float getVPP()
+{
+float result;
+int readValue; // value read from the sensor
+int maxValue = 0; // store max value here
+int minValue = 4096; // store min value here ESP32 ADC resolution
+
+uint32_t start_time = millis();
+while((millis()-start_time) < 1000) { // sample for 1 second
+        readValue = analogRead(sensorIn);
+        if (readValue > maxValue) {
+            maxValue = readValue;
+        }
+        if (readValue < minValue) {
+            minValue = readValue;
+        }
+    }
+// Subtract min from max
+ // Subtract min from max
+    result = ((maxValue - minValue) * 3.3) / 4096.0; // ESP32 ADC resolution 4096
+
+return result;
+}
+
+void setup() {
+    // Initialize serial communication
+    Serial.begin(115200);
+    pinMode(BATTERY_PIN, OUTPUT);
+    pinMode(MAINS_PIN, OUTPUT);
   
-  ptr +="<div class='data energy'>";
-  ptr +="<div class='side-by-side icon'>";
-  ptr +="<svg enable-background='new 0 0 58.422 40.639'height=40.639px id=Layer_1 version=1.1 viewBox='0 0 58.422 40.639'width=58.422px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><g><path d='M58.203,37.754l0.007-0.004L42.09,9.935l-0.001,0.001c-0.356-0.543-0.969-0.902-1.667-0.902";
-  ptr +="c-0.655,0-1.231,0.32-1.595,0.808l-0.011-0.007l-0.039,0.067c-0.021,0.03-0.035,0.063-0.054,0.094L22.78,37.692l0.008,0.004";
-  ptr +="c-0.149,0.28-0.242,0.594-0.242,0.934c0,1.102,0.894,1.995,1.994,1.995v0.015h31.888c1.101,0,1.994-0.893,1.994-1.994";
-  ptr +="C58.422,38.323,58.339,38.024,58.203,37.754z'fill=#955BA5 /><path d='M19.704,38.674l-0.013-0.004l13.544-23.522L25.13,1.156l-0.002,0.001C24.671,0.459,23.885,0,22.985,0";
-  ptr +="c-0.84,0-1.582,0.41-2.051,1.038l-0.016-0.01L20.87,1.114c-0.025,0.039-0.046,0.082-0.068,0.124L0.299,36.851l0.013,0.004";
-  ptr +="C0.117,37.215,0,37.62,0,38.059c0,1.412,1.147,2.565,2.565,2.565v0.015h16.989c-0.091-0.256-0.149-0.526-0.149-0.813";
-  ptr +="C19.405,39.407,19.518,39.019,19.704,38.674z'fill=#955BA5 /></g></svg>";
-  ptr +="</div>";
-  ptr +="<div class='side-by-side text'>Inverter Energy</div>";
-  ptr +="<div class='side-by-side reading'>";
-  ptr +=(int)energy1;
-  ptr +="<div class='side-by-side text'>kWh</div>";
-  ptr +="</div>";
- 
-  ptr +="<h3>Battery Readings</h3>";
-  ptr +="<div class='container'>";
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Connecting to Network.....");
+        Serial.print("WiFi Status: ");
+        Serial.println(WiFi.status());
+        attempts++;
+        if (attempts > 20) {
+            Serial.println("Failed to connect to WiFi. Please check your credentials.");
+            break;
+        }
+    }
+
+    // Print ESP32-S local IP address
+    Serial.println("WiFi Connected");
+    Serial.print("Local Network Address: ");
+    Serial.println(WiFi.localIP());
+
+    // Route to get to the WebPage
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send_P(200, "text/html", index_html);
+    });
+
+    // Route to get sensor data
+    server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String data = "{\"inverterVoltage\":"; if(isnan(pzem1.voltage())){data+=String(0);} else {data+=String(pzem1.voltage());} data+= ",";
+        data += "\"inverterCurrent\":";   if(isnan(pzem1.current())){data+=String(0);} else {data+=String(pzem1.current());} data+= ",";
+        data += "\"inverterPower\":";   if(isnan(pzem1.power())){data+=String(0);} else {data+=String(pzem1.power());} data+= ",";
+        data += "\"inverterEnergy\":";   if(isnan(pzem1.energy())){data+=String(0);} else {data+=String(pzem1.energy());} data+= ",";
+        data += "\"mainsVoltage\":";   if(isnan(pzem2.voltage())){data+=String(0);} else {data+=String(pzem2.voltage());} data+= ",";
+        data += "\"mainsCurrent\":";   if(isnan(pzem2.current())){data+=String(0);} else {data+=String(pzem2.current());} data+= ",";
+        data += "\"mainsPower\":";   if(isnan(pzem2.power())){data+=String(0);} else {data+=String(pzem2.power());} data+= ",";
+        data += "\"mainsEnergy\":";   if(isnan(pzem2.energy())){data+=String(0);} else {data+=String(pzem2.energy());} data+= ",";
+        data += "\"loadVoltage\":";   if(isnan(pzem3.voltage())){data+=String(0);} else {data+=String(pzem3.voltage());} data+= ",";
+        data += "\"loadCurrent\":";   if(isnan(pzem3.current())){data+=String(0);} else {data+=String(pzem3.current());} data+= ",";
+        data += "\"loadPower\":";   if(isnan(pzem3.power())){data+=String(0);} else {data+=String(pzem3.power());} data+= ",";
+        data += "\"loadEnergy\":";   if(isnan(pzem3.energy())){data+=String(0);} else {data+=String(pzem3.energy());} data+= ",";
+        data += "\"batteryVoltage\":";   if(isnan(getVoltage())){data+=String(0);} else {data+=String(getVoltage());} data+= ",";
+        data += "\"batteryCurrent\":";   if(isnan(getCurrent())){data+=String(0);} else {data+=String(getCurrent());} data+= "}";
+        
+        request->send(200, "application/json", data);
+    });
+
+    // Start server
+    server.begin();
+
+    //LCD initalization
+    lcd. init ();
+    // Turn on the backlight on LCD. 
+    lcd. backlight ();
+    lcd.print ("Battery Voltage &");
+    lcd. setCursor (0, 1);
+    lcd.print ("Current Monitor");
+    delay(1000);
+    lcd.clear();  
+}
+
+void loop() {
+  //Declare Arrays to hold data
+  float battData[2];
+  float InvData[4];
+  float MainsData[4];
+  float LoadData[4];
+
+  //Colllect Data
+  collectdata(battData, InvData, MainsData, LoadData);
+  //Determine PowerSource
+  String selectedpowersource = selectpowersource(battData, InvData, MainsData, LoadData);
+  Serial.print("Current Source:");
+  Serial.println(selectedpowersource);
+  //Switch to Selected Source
+  SwitchPower(selectedpowersource);
+  //LCD ACS712
+  Serial.println (""); 
+  float Voltage = getVoltage();
+  float Current = getCurrent(); 
+  Serial.print(Voltage);
+  Serial.print(" Volts  ---  ");
+  Serial.println("Batt Pin: "); Serial.print(analogRead(25));
+  Serial.print("Mains Pin: "); Serial.print(analogRead(26));
+  lcd. setCursor (0, 0);
+  lcd.print (Voltage);
+  lcd.print (" V ");
+  //Here cursor is placed on first position (col: 0) of the second line (row: 1) 
+  lcd. setCursor (0, 1);
+  lcd.print (Current);
+  lcd.print (" A ");
+  delay (1000);
+  Serial.println("");
   
-  ptr +="<div class='data acs_voltage'>";
-  ptr +="<div class='side-by-side icon'>";
-  ptr +="<svg enable-background='new 0 0 19.438 54.003'height=54.003px id=Layer_1 version=1.1 viewBox='0 0 19.438 54.003'width=19.438px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><g><path d='M11.976,8.82v-2h4.084V6.063C16.06,2.715,13.345,0,9.996,0H9.313C5.965,0,3.252,2.715,3.252,6.063v30.982";
-  ptr +="C1.261,38.825,0,41.403,0,44.286c0,5.367,4.351,9.718,9.719,9.718c5.368,0,9.719-4.351,9.719-9.718";
-  ptr +="c0-2.943-1.312-5.574-3.378-7.355V18.436h-3.914v-2h3.914v-2.808h-4.084v-2h4.084V8.82H11.976z M15.302,44.833";
-  ptr +="c0,3.083-2.5,5.583-5.583,5.583s-5.583-2.5-5.583-5.583c0-2.279,1.368-4.236,3.326-5.104V24.257C7.462,23.01,8.472,22,9.719,22";
-  ptr +="s2.257,1.01,2.257,2.257V39.73C13.934,40.597,15.302,42.554,15.302,44.833z'fill=#F29C21 /></g></svg>";
-  ptr +="</div>";
-  ptr +="<div class='side-by-side text'>Battery Voltage</div>";
-  ptr +="<div class='side-by-side reading'>";
-  ptr +=(int)acs_voltage;
-  ptr +="<div class='side-by-side text'>V</div>";
-  ptr +="</div>";
-  
-  ptr +="<div class='data acs_current'>";
-  ptr +="<div class='side-by-side icon'>";
-  ptr +="<svg enable-background='new 0 0 29.235 40.64'height=20.64px id=Layer_1 version=1.1 viewBox='0 0 29.235 40.64'width=10.235px x=0px xml:space=preserve xmlns=http://www.w3.org/2000/svg xmlns:xlink=http://www.w3.org/1999/xlink y=0px><path d='M14.618,0C14.618,0,0,17.95,0,26.022C0,34.096,6.544,40.64,14.618,40.64s14.617-6.544,14.617-14.617";
-  ptr +="C29.235,17.95,14.618,0,14.618,0z M13.667,37.135c-5.604,0-10.162-4.56-10.162-10.162c0-0.787,0.638-1.426,1.426-1.426";
-  ptr +="c0.787,0,1.425,0.639,1.425,1.426c0,4.031,3.28,7.312,7.311,7.312c0.787,0,1.425,0.638,1.425,1.425";
-  ptr +="C15.093,36.497,14.455,37.135,13.667,37.135z'fill=#3C97D3 /></svg>";
-  ptr +="</div>";
-  ptr +="<div class='side-by-side text'>Inverter current</div>";
-  ptr +="<div class='side-by-side reading'>";
-  ptr +=(int)acs_current;
-  ptr +="<div class='side-by-side text'>A</div>";
-  ptr +="</div>";
-  
-  ptr +="</div>";
-  ptr +="</body>";
-  ptr +="</html>";
-  return ptr;
+Voltage = getVPP();
+VRMS = (Voltage/2.0) *0.707; //root 2 is 0.707
+AmpsRMS = ((VRMS * 1000)/mVperAmp)-0.3; //0.3 is the error I got for my sensor
+Serial.print("Voltage: ");
+Serial.print(Voltage);
+Serial.print("V ");
+Serial.print("Current: ");
+Serial.print(AmpsRMS);
+Serial.print("A ");
+Watt = (AmpsRMS*240/1.2);
+// note: 1.2 is my own empirically established calibration factor
+// as the voltage measured at D34 depends on the length of the OUT-to-D34 wire
+// 240 is the main AC power voltage – this parameter changes locally
+Serial.print("Power: ");
+Serial.print(Watt);
+Serial.println("W");
 }
