@@ -2,13 +2,15 @@
 #include "WiFi.h"
 #include "ESPAsyncWebServer.h"
 #include <PZEM004Tv30.h>
-#include <LiquidCrystal_I2C.h>
 
 //Define Threshold for voltages and current
 #define Batt_Disconnect_Voltage 24.5 
 #define Batt_Reconnect_Voltage 27.0
-#define Min_Batt_Current 0.0
 
+//Define Battery Threshold Voltage Pins
+#define BATT_DISCONNECT_PIN 34 // for 24.5V disconnect
+#define BATT_RECONNECT_PIN 35 // for 27V reconnect
+  
 //Define POWERSWITCHING Pins
 #define BATTERY_PIN 25 //Change as needed.
 #define MAINS_PIN 26 //Change as needed.
@@ -23,18 +25,19 @@ PZEM004Tv30 pzem1(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x55); //inverter
 PZEM004Tv30 pzem2(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x56); //mains
 PZEM004Tv30 pzem3(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x58); //load
 
-
-double VRMS = 0;
-double AmpsRMS = 0;
-float getVoltage();
-float getCurrent(); 
-float getVPP(); 
+// Declare global variables
+int laststate_batt = LOW;
+int laststate_mains = LOW;
+String battData[1];
+float InvData[4];
+float MainsData[4];
+float LoadData[4];
+//FUNCTIONS-----------------------------------------------------------------------------------------------------------
 
 //Collect Data from Sensors
-void collectdata(float battData[], float InverterData[], float MainsData[], float LoadData[]) {
+void collectdata(String &battData, float InverterData[], float MainsData[], float LoadData[]) {
   //Battery Data
-  battData[0] = getVPP();
-  battData[1] = getCurrent();
+  battData = SwitchPower(laststate_batt, laststate_mains, MainsData);
 
   //Inverter Data
   InverterData[0] = pzem1.voltage();
@@ -53,102 +56,61 @@ void collectdata(float battData[], float InverterData[], float MainsData[], floa
   LoadData[1] = pzem3.current();
   LoadData[2] = pzem3.power();
   LoadData[3] = pzem3.energy();
-
 }
 
-//Determine Which PowerSource to use
-//Currently only checking Voltage. Subject to change.
-String selectpowersource(float battData[],float InvData[],float MainsData[],float LoadData[]){
-  //assign data to variables
-  float battvolt = battData[0];
-  float battcur = battData[1];
-  
-  float invvolt = InvData[0];
-  float invcur = InvData[1];
-  float invpow = InvData[2];
-  float invene= InvData[3];
-  
+String SwitchPower(int laststate_batt, int laststate_mains, float MainsData[]){
   float mainsvolt = MainsData[0];
-  float mainscur = MainsData[1];
-  float mainspow = MainsData[2];
-  float mainsene = MainsData[3];
+  laststate_batt = digitalRead(BATTERY_PIN); //state of batt
+  laststate_mains = digitalRead(MAINS_PIN); //state of mains
+  int batt_disconnect = (analogRead(BATT_DISCONNECT_PIN) > 2048) ? HIGH : LOW; //state of disconnect voltage
+  int batt_reconnect = (analogRead(BATT_RECONNECT_PIN) > 2048) ? HIGH : LOW; //state of reconnect voltage
+  String chargebatt;
+  
+  Serial.print("24.5 PIN: ");
+  Serial.println(batt_disconnect);
+  Serial.print("27 PIN: ");
+  Serial.println(batt_reconnect);
 
-  float loadvolt =LoadData[0];
-  float loadcur = LoadData[1];
-  float loadpow = LoadData[2];
-  float loadene = LoadData[3];
-
-  String static battstate = "connected";
-
-  //begin decision logic
-  // If battery between Reconnect/Disconnect Voltages
-  if  (battvolt > Batt_Disconnect_Voltage && battvolt < Batt_Reconnect_Voltage){
-    //If Battery is Connected use battery, else check Mains. 
-    if (battstate == "connected"){
-      return "Battery";
-    }
-    else if (battstate == "disconnected"){
-      if (mainsvolt != 0){
-        return "Mains";
-      } 
-    else{
-        return "NoSource";
+  //Control Logic
+  if(batt_reconnect==1){ //max threshold on
+      if(laststate_batt == 0){ //last state of batt is on
+        chargebatt = "Battery Available (Discharging)";
+        //do nothing
+      }else if (laststate_mains == 0){ // last state of main is on
+        chargebatt = "Battery Available (Charging)";
+        digitalWrite(BATTERY_PIN, LOW); // batt on
+        digitalWrite(MAINS_PIN, HIGH); // mains off
+        delay(100);
+        digitalWrite(BATTERY_PIN, HIGH); // toggle
       }
-    }
-  }
-  // Disconnect Battery 
-  if (battvolt <= Batt_Disconnect_Voltage){
-    battstate = "disconnected";
-    if (mainsvolt != 0){
-        return "Mains";
-      } 
-    else{
-        return "NoSource";
+    }else if (batt_disconnect == 1 && batt_reconnect ==0){ //max threshold off and min threshold on
+      if(laststate_batt == 0 && laststate_mains ==0){ 
+        chargebatt = "No Supply";
+      }else if(laststate_batt == 0){ // last state of batt is on
+        chargebatt = "Battery Available (Discharging)";
+        //do nothing
+      }else if(laststate_mains == 0){ // last state of mains is on
+        chargebatt = "Battery Available (Charging)";
+        //do nothing
       }
-  }
-  //Reconnect Battery
-  if (battvolt >= Batt_Reconnect_Voltage){
-    battstate = "connected";
-    return "Battery";
-  }
-  return "Error Selecting Source"; // Return "Unknown" if none of the conditions are met
+    }else if(mainsvolt != 0){
+      chargebatt = "Battery Not Available (Charging)";
+      digitalWrite(BATTERY_PIN, HIGH); // batt off
+      digitalWrite(MAINS_PIN, LOW); // mains on
+      delay(100);
+      digitalWrite(MAINS_PIN, HIGH); // toggle
+    }else{
+      chargebatt = "No Supply";
+    }
+    return chargebatt;
 }
-
-void SwitchPower(String selectedpowersource){
-  if (selectedpowersource == "Battery"){
-    digitalWrite(BATTERY_PIN, HIGH); // Turn on battery
-    digitalWrite(MAINS_PIN, LOW);    // Turn off mains
-  }
-  else if (selectedpowersource == "Mains"){
-    digitalWrite(BATTERY_PIN, LOW); // Turn off battery
-    digitalWrite(MAINS_PIN, HIGH);    // Turn on mains
-  }
-  else {
-    digitalWrite(BATTERY_PIN, LOW); // Turn off battery
-    digitalWrite(MAINS_PIN, LOW);    // Turn off mains
-  }
-}
-
-//LCD declaration
-LiquidCrystal_I2C lcd (0x27, 16,2); 
-
-// ACS712 Declarations
-const int sensorIn = 34;      // pin where the OUT pin from sensor is connected on Arduino
-int mVperAmp = 100;           // this the 5A version of the ACS712 -use 100 for 20A Module and 66 for 30A Module
-int Watt = 0;
-double Voltage = 0;
-double Current =0;
-
 
 // WiFi credentials
 const char* ssid = "Jem";
 const char* password = "jemerjaps";
-
-
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 3600;
-
 
 // Create AsyncWebServer instance
 AsyncWebServer server(80);
@@ -317,14 +279,14 @@ const char index_html[] PROGMEM = R"rawliteral(
               <td>${data.inverterVoltage.toFixed(2)} V</td>
               <td>${data.mainsVoltage.toFixed(2)} V</td>
               <td>${data.loadVoltage.toFixed(2)} V</td>
-              <td>${data.batteryVoltage.toFixed(2)} V</td>
+              <td>${data.batteryAvailability.toFixed(2)} V</td>
             </tr>
             <tr>
               <th>Current</th>
               <td>${data.inverterCurrent.toFixed(2)} A</td>
               <td>${data.mainsCurrent.toFixed(2)} A</td>
               <td>${data.loadCurrent.toFixed(2)} A</td>
-              <td>${data.batteryCurrent.toFixed(2)} A</td>
+              <td></td>
             </tr>
             <tr>
               <th>Energy</th>
@@ -345,17 +307,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         };
         xhttp.open("GET", "/data", true);
         xhttp.send();
-    }
-
-    function updateDataTable(data) {
-      var table = document.getElementById("dataTable");
-      var row = table.insertRow(1); // Add after headings
-      var cell1 = row.insertCell(0);
-      var cell2 = row.insertCell(1);
-      var cell3 = row.insertCell(2);
-      cell1.innerHTML = getCurrentTime(); // You need to implement this function
-      cell2.innerHTML = data.batteryVoltage.toFixed(2) + " V";
-      cell3.innerHTML = data.batteryCurrent.toFixed(2) + " A";
     }
     
     updateSensorData();
@@ -386,57 +337,14 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 )rawliteral";
 
-//  ACS Function
-float getVoltage()
-{
-  float result = 0.0;
-  int readValue = 0;                // value read from the sensor
-  
-   uint32_t start_time = millis();
-   while((millis()-start_time) < 1000) //sample for 1 Sec
-   {
-       readValue = analogRead(sensorIn);
-       Voltage = (readValue *(5/1023.0))-3.5; //Gets V
-       return Voltage;
- }
-}
-
-float getCurrent() {
-  float current_voltage = getVoltage();
-  float acs_current = ((current_voltage) / 0.1); //0.185V/A is the sensitivity of the ACS712
-  return acs_current;
-}
-
-float getVPP()
-{
-float result;
-int readValue; // value read from the sensor
-int maxValue = 0; // store max value here
-int minValue = 4096; // store min value here ESP32 ADC resolution
-
-uint32_t start_time = millis();
-while((millis()-start_time) < 1000) { // sample for 1 second
-        readValue = analogRead(sensorIn);
-        if (readValue > maxValue) {
-            maxValue = readValue;
-        }
-        if (readValue < minValue) {
-            minValue = readValue;
-        }
-    }
-// Subtract min from max
- // Subtract min from max
-    result = ((maxValue - minValue) * 3.3) / 4096.0; // ESP32 ADC resolution 4096
-
-return result;
-}
-
 void setup() {
     // Initialize serial communication
     Serial.begin(115200);
     pinMode(BATTERY_PIN, OUTPUT);
     pinMode(MAINS_PIN, OUTPUT);
-  
+    pinMode(BATT_DISCONNECT_PIN, INPUT);
+    pinMode(BATT_RECONNECT_PIN, INPUT);
+    
     // Connect to WiFi
     WiFi.begin(ssid, password);
     
@@ -477,73 +385,47 @@ void setup() {
         data += "\"loadCurrent\":";   if(isnan(pzem3.current())){data+=String(0);} else {data+=String(pzem3.current());} data+= ",";
         data += "\"loadPower\":";   if(isnan(pzem3.power())){data+=String(0);} else {data+=String(pzem3.power());} data+= ",";
         data += "\"loadEnergy\":";   if(isnan(pzem3.energy())){data+=String(0);} else {data+=String(pzem3.energy());} data+= ",";
-        data += "\"batteryVoltage\":";   if(isnan(getVoltage())){data+=String(0);} else {data+=String(getVoltage());} data+= ",";
-        data += "\"batteryCurrent\":";   if(isnan(getCurrent())){data+=String(0);} else {data+=String(getCurrent());} data+= "}";
+        data += "\"batteryAvailability\":";   data+=SwitchPower(laststate_batt, laststate_mains, MainsData); data+= "}";
         
         request->send(200, "application/json", data);
     });
 
     // Start server
     server.begin();
-
-    //LCD initalization
-    lcd. init ();
-    // Turn on the backlight on LCD. 
-    lcd. backlight ();
-    lcd.print ("Battery Voltage &");
-    lcd. setCursor (0, 1);
-    lcd.print ("Current Monitor");
-    delay(1000);
-    lcd.clear();  
 }
 
 void loop() {
   //Declare Arrays to hold data
-  float battData[2];
+  String battData[1];
   float InvData[4];
   float MainsData[4];
   float LoadData[4];
-
+  
   //Colllect Data
-  collectdata(battData, InvData, MainsData, LoadData);
-  //Determine PowerSource
-  String selectedpowersource = selectpowersource(battData, InvData, MainsData, LoadData);
-  Serial.print("Current Source:");
-  Serial.println(selectedpowersource);
-  //Switch to Selected Source
-  SwitchPower(selectedpowersource);
-  //LCD ACS712
-  Serial.println (""); 
-  float Voltage = getVoltage();
-  float Current = getCurrent(); 
-  Serial.print(Voltage);
-  Serial.print(" Volts  ---  ");
-  Serial.println("Batt Pin: "); Serial.print(analogRead(25));
-  Serial.print("Mains Pin: "); Serial.print(analogRead(26));
-  lcd. setCursor (0, 0);
-  lcd.print (Voltage);
-  lcd.print (" V ");
-  //Here cursor is placed on first position (col: 0) of the second line (row: 1) 
-  lcd. setCursor (0, 1);
-  lcd.print (Current);
-  lcd.print (" A ");
+  collectdata(battData[0], InvData, MainsData, LoadData);
+  
+  //Determine Power Source  
+  SwitchPower(laststate_batt, laststate_mains, MainsData);
+
+  //For monitoring through Serial Monitor
+  String SelectedPowerSource = SwitchPower(laststate_batt, laststate_mains, MainsData);
+  Serial.print("Selected Power Source:");
+  Serial.println(SelectedPowerSource);
+  Serial.print("Battery Last State: ");
+  Serial.println(digitalRead(BATTERY_PIN));
+  Serial.print("Mains Last State: ");
+  Serial.println(digitalRead(MAINS_PIN));
+  
+  int batt_disconnect = (analogRead(BATT_DISCONNECT_PIN) > 2048) ? HIGH : LOW; //state of disconnect voltage
+  int batt_reconnect = (analogRead(BATT_RECONNECT_PIN) > 2048) ? HIGH : LOW; //state of reconnect voltage
+  
+  Serial.print("Battery Disconnect Output (24.5): ");
+  Serial.println(batt_disconnect);
+  Serial.print("Battery Reconnect Output (27): ");
+  Serial.println(batt_reconnect);
+  
   delay (1000);
   Serial.println("");
   
-Voltage = getVPP();
-VRMS = (Voltage/2.0) *0.707; //root 2 is 0.707
-AmpsRMS = ((VRMS * 1000)/mVperAmp)-0.3; //0.3 is the error I got for my sensor
-Serial.print("Voltage: ");
-Serial.print(Voltage);
-Serial.print("V ");
-Serial.print("Current: ");
-Serial.print(AmpsRMS);
-Serial.print("A ");
-Watt = (AmpsRMS*240/1.2);
-// note: 1.2 is my own empirically established calibration factor
-// as the voltage measured at D34 depends on the length of the OUT-to-D34 wire
-// 240 is the main AC power voltage – this parameter changes locally
-Serial.print("Power: ");
-Serial.print(Watt);
-Serial.println("W");
+ 
 }
