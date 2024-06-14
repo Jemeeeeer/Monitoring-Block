@@ -21,35 +21,39 @@
 #define PZEM_SERIAL Serial2
 
 // Create PZEM instance
-PZEM004Tv30 pzem1(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x55); //inverter 
-PZEM004Tv30 pzem2(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x56); //mains
+PZEM004Tv30 pzem1(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x56); //inverter
+PZEM004Tv30 pzem2(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x55); //mains
 PZEM004Tv30 pzem3(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x58); //load
 
 // Declare global variables
 int laststate_batt = LOW;
 int laststate_mains = LOW;
-String battData[1];
-float InvData[4];
-float MainsData[4];
-float LoadData[4];
+String battData;
+float InvData[4] = {0.0, 0.0, 0.0, 0.0};
+float MainsData[4] = {0.0, 0.0, 0.0, 0.0};
+float LoadData[4] = {0.0, 0.0, 0.0, 0.0};
+
+String SelectedPowerSource;
+// Forward declaration (prototype) of selectpowersource function
+String selectpowersource(float InvData, float MainsData, float LoadData);
+
+
 //FUNCTIONS-----------------------------------------------------------------------------------------------------------
 
 //Collect Data from Sensors
-void collectdata(String &battData, float InverterData[], float MainsData[], float LoadData[]) {
-  //Battery Data
-  battData = SwitchPower(laststate_batt, laststate_mains, MainsData);
+void collectdata(float InverterData[], float MainsData[], float LoadData[]) {
 
+ //AC Main Line Data
+  MainsData[0] = pzem2.voltage();
+  MainsData[1] = pzem2.current();
+  MainsData[2] = pzem2.power();
+  MainsData[3] = pzem2.energy();
+  
   //Inverter Data
   InverterData[0] = pzem1.voltage();
   InverterData[1] = pzem1.current();
   InverterData[2] = pzem1.power();
   InverterData[3] = pzem1.energy();
-
-  //AC Main Line Data
-  MainsData[0] = pzem2.voltage();
-  MainsData[1] = pzem2.current();
-  MainsData[2] = pzem2.power();
-  MainsData[3] = pzem2.energy();
 
  //Connected Load Data
   LoadData[0] = pzem3.voltage();
@@ -58,51 +62,103 @@ void collectdata(String &battData, float InverterData[], float MainsData[], floa
   LoadData[3] = pzem3.energy();
 }
 
-String SwitchPower(int laststate_batt, int laststate_mains, float MainsData[]){
+String selectpowersource(float InvData[], float MainsData[],float LoadData[]){
+  collectdata(InvData, MainsData, LoadData);
+  float invvolt = InvData[0];
+  float invcur = InvData[1];
+  float invpow = InvData[2];
+  float invene = InvData[3];
+
   float mainsvolt = MainsData[0];
-  laststate_batt = digitalRead(BATTERY_PIN); //state of batt
-  laststate_mains = digitalRead(MAINS_PIN); //state of mains
+  float mainscurt = MainsData[1];
+  float mainspow = MainsData[2];
+  float mainsene = MainsData[3];
+
+  float loadvolt = LoadData[0];
+  float loadcur = LoadData[1];
+  float loadpow = LoadData[2];
+  float loadene = LoadData[3];
+
+  laststate_batt = digitalRead(13); //battery
+  laststate_mains = digitalRead(14); //mains
   int batt_disconnect = (analogRead(BATT_DISCONNECT_PIN) > 2048) ? HIGH : LOW; //state of disconnect voltage
   int batt_reconnect = (analogRead(BATT_RECONNECT_PIN) > 2048) ? HIGH : LOW; //state of reconnect voltage
   String chargebatt;
   
-  Serial.print("24.5 PIN: ");
-  Serial.println(batt_disconnect);
-  Serial.print("27 PIN: ");
-  Serial.println(batt_reconnect);
-
-  //Control Logic
   if(batt_reconnect==1){ //max threshold on
       if(laststate_batt == 0){ //last state of batt is on
-        chargebatt = "Battery Available (Discharging)";
+        chargebatt = "Battery Available (Discharging) Using Battery";
         //do nothing
       }else if (laststate_mains == 0){ // last state of main is on
-        chargebatt = "Battery Available (Charging)";
-        digitalWrite(BATTERY_PIN, LOW); // batt on
-        digitalWrite(MAINS_PIN, HIGH); // mains off
-        delay(100);
-        digitalWrite(BATTERY_PIN, HIGH); // toggle
+        chargebatt = "Battery Available (Charging) Using Battery";
       }
     }else if (batt_disconnect == 1 && batt_reconnect ==0){ //max threshold off and min threshold on
       if(laststate_batt == 0 && laststate_mains ==0){ 
         chargebatt = "No Supply";
       }else if(laststate_batt == 0){ // last state of batt is on
-        chargebatt = "Battery Available (Discharging)";
+        chargebatt = "Battery Available (Discharging) Using Battery";
         //do nothing
       }else if(laststate_mains == 0){ // last state of mains is on
-        chargebatt = "Battery Available (Charging)";
+        chargebatt = "Battery Available (Charging) Using Mains";
         //do nothing
       }
-    }else if(mainsvolt != 0){
-      chargebatt = "Battery Not Available (Charging)";
-      digitalWrite(BATTERY_PIN, HIGH); // batt off
-      digitalWrite(MAINS_PIN, LOW); // mains on
-      delay(100);
-      digitalWrite(MAINS_PIN, HIGH); // toggle
+    }else if(batt_disconnect == 0){
+      if(mainsvolt != 0 && laststate_mains == 0){ //last state of mains is on
+        chargebatt = "Battery Unavailable (Charging) Still using Mains";
+        //do nothing
+      }else if(mainsvolt != 0 && laststate_mains == 1) { //last state of mains is off
+        chargebatt = "Battery Unavailable (Charging) Using Mains";
     }else{
       chargebatt = "No Supply";
     }
+    }
+    Serial.print("Mains Volt: ");
+    Serial.println(mainsvolt);
     return chargebatt;
+  
+}
+
+void SwitchPower(){
+  SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);
+  laststate_batt = digitalRead(13); //battery
+  laststate_mains = digitalRead(14); //mains
+  //Control Logic
+  if(SelectedPowerSource == "Battery Available (Discharging) Using Battery"){ //max threshold on
+      if(laststate_batt == 0){ //last state of batt is on
+        //do nothing
+      }else if (laststate_mains == 0){ // last state of main is on
+        //do nothing
+      }
+    }else if (SelectedPowerSource == "Battery Available (Charging) Using Battery"){
+      if(laststate_batt == 0){
+        //do nothing
+      }else{
+        digitalWrite(BATTERY_PIN, LOW); // batt on
+        digitalWrite(MAINS_PIN, HIGH); // mains off
+        delay(3000);
+        digitalWrite(BATTERY_PIN, HIGH); // toggle//max threshold off and min threshold on
+      }
+    }else if (SelectedPowerSource == "Battery Available (Charging) Using Mains"){
+        //do nothing
+    }else if (SelectedPowerSource == "Battery Unavailable (Charging) Using Mains"){
+      if(laststate_mains == 0){
+        //do nothing
+      }else{
+        digitalWrite(BATTERY_PIN, HIGH); // batt off
+        digitalWrite(MAINS_PIN, LOW); // mains on
+        delay(3000);
+        digitalWrite(MAINS_PIN, HIGH); // toggle//max threshold off and min threshold on
+      }
+    }else if (SelectedPowerSource == "Battery Unavailable (Charging) Still using Mains"){
+        //do nothing
+    }else if (SelectedPowerSource == "No Supply"){
+      if(laststate_mains == 1 && laststate_mains ==1){
+        //do nothing
+      }else{
+        digitalWrite(BATTERY_PIN, HIGH); // batt off
+        digitalWrite(MAINS_PIN, HIGH); // mains on
+      }
+    }
 }
 
 // WiFi credentials
@@ -260,7 +316,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   <script>
     // Function to update sensor data from ESP32
-    function updateSensorData() {
+  function updateSensorData() {
         var xhttp = new XMLHttpRequest();
         xhttp.onreadystatechange = function() {
             if (this.readyState == 4 && this.status == 200){
@@ -279,7 +335,7 @@ const char index_html[] PROGMEM = R"rawliteral(
               <td>${data.inverterVoltage.toFixed(2)} V</td>
               <td>${data.mainsVoltage.toFixed(2)} V</td>
               <td>${data.loadVoltage.toFixed(2)} V</td>
-              <td>${data.batteryAvailability.toFixed(2)} V</td>
+              <td>${String(data.batteryAvailability)}</td>
             </tr>
             <tr>
               <th>Current</th>
@@ -307,6 +363,16 @@ const char index_html[] PROGMEM = R"rawliteral(
         };
         xhttp.open("GET", "/data", true);
         xhttp.send();
+    }
+    function updateDataTable(data) {
+      var table = document.getElementById("dataTable");
+      var row = table.insertRow(1); // Add after headings
+      var cell1 = row.insertCell(0);
+      var cell2 = row.insertCell(1);
+      var cell3 = row.insertCell(2);
+      cell1.innerHTML = getCurrentTime(); // You need to implement this function
+      cell2.innerHTML = data.batteryVoltage.toFixed(2) + " V";
+      cell3.innerHTML = data.batteryCurrent.toFixed(2) + " A";
     }
     
     updateSensorData();
@@ -338,10 +404,9 @@ const char index_html[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 void setup() {
+    SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);  // Assign to global variable
     // Initialize serial communication
     Serial.begin(115200);
-    pinMode(BATTERY_PIN, OUTPUT);
-    pinMode(MAINS_PIN, OUTPUT);
     pinMode(BATT_DISCONNECT_PIN, INPUT);
     pinMode(BATT_RECONNECT_PIN, INPUT);
     
@@ -350,7 +415,7 @@ void setup() {
     
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
+        
         Serial.println("Connecting to Network.....");
         Serial.print("WiFi Status: ");
         Serial.println(WiFi.status());
@@ -385,7 +450,8 @@ void setup() {
         data += "\"loadCurrent\":";   if(isnan(pzem3.current())){data+=String(0);} else {data+=String(pzem3.current());} data+= ",";
         data += "\"loadPower\":";   if(isnan(pzem3.power())){data+=String(0);} else {data+=String(pzem3.power());} data+= ",";
         data += "\"loadEnergy\":";   if(isnan(pzem3.energy())){data+=String(0);} else {data+=String(pzem3.energy());} data+= ",";
-        data += "\"batteryAvailability\":";   data+=SwitchPower(laststate_batt, laststate_mains, MainsData); data+= "}";
+        SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);  // Assign to global variable
+        data += "\"batteryAvailability\":";   data+=SelectedPowerSource; data+= "}";
         
         request->send(200, "application/json", data);
     });
@@ -396,25 +462,25 @@ void setup() {
 
 void loop() {
   //Declare Arrays to hold data
-  String battData[1];
   float InvData[4];
   float MainsData[4];
   float LoadData[4];
   
   //Colllect Data
-  collectdata(battData[0], InvData, MainsData, LoadData);
-  
-  //Determine Power Source  
-  SwitchPower(laststate_batt, laststate_mains, MainsData);
+  collectdata(InvData, MainsData, LoadData);
+  SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);
+  SwitchPower();
+   
+  laststate_batt = digitalRead(13); //battery
+  laststate_mains = digitalRead(14); //mains
 
   //For monitoring through Serial Monitor
-  String SelectedPowerSource = SwitchPower(laststate_batt, laststate_mains, MainsData);
   Serial.print("Selected Power Source:");
   Serial.println(SelectedPowerSource);
   Serial.print("Battery Last State: ");
-  Serial.println(digitalRead(BATTERY_PIN));
+  Serial.println(laststate_batt);
   Serial.print("Mains Last State: ");
-  Serial.println(digitalRead(MAINS_PIN));
+  Serial.println(laststate_mains);
   
   int batt_disconnect = (analogRead(BATT_DISCONNECT_PIN) > 2048) ? HIGH : LOW; //state of disconnect voltage
   int batt_reconnect = (analogRead(BATT_RECONNECT_PIN) > 2048) ? HIGH : LOW; //state of reconnect voltage
@@ -423,9 +489,5 @@ void loop() {
   Serial.println(batt_disconnect);
   Serial.print("Battery Reconnect Output (27): ");
   Serial.println(batt_reconnect);
-  
-  delay (1000);
   Serial.println("");
-  
- 
 }
