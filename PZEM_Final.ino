@@ -494,7 +494,5 @@ void loop() {
   Serial.println(batt_disconnect);
   Serial.print("Battery Reconnect Output (27): ");
   Serial.println(batt_reconnect);
-  
-  delay (1000);
   Serial.println("");
 }
