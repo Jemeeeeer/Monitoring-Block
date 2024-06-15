@@ -133,10 +133,10 @@ void SwitchPower(){
       if(laststate_batt == 0){
         //do nothing
       }else{
-        digitalWrite(BATTERY_PIN, LOW); // batt on
-        digitalWrite(MAINS_PIN, HIGH); // mains off
+        digitalWrite(BATTERY_PIN, HIGH); // batt on
+        digitalWrite(MAINS_PIN, LOW); // mains off
         delay(3000);
-        digitalWrite(BATTERY_PIN, HIGH); // toggle//max threshold off and min threshold on
+        digitalWrite(BATTERY_PIN, LOW); // toggle//max threshold off and min threshold on
       }
     }else if (SelectedPowerSource == "Battery Available (Charging) Using Mains"){
         //do nothing
@@ -144,10 +144,10 @@ void SwitchPower(){
       if(laststate_mains == 0){
         //do nothing
       }else{
-        digitalWrite(BATTERY_PIN, HIGH); // batt off
-        digitalWrite(MAINS_PIN, LOW); // mains on
+        digitalWrite(BATTERY_PIN, LOW); // batt off
+        digitalWrite(MAINS_PIN, HIGH); // mains on
         delay(3000);
-        digitalWrite(MAINS_PIN, HIGH); // toggle//max threshold off and min threshold on
+        digitalWrite(MAINS_PIN, LOW); // toggle//max threshold off and min threshold on
       }
     }else if (SelectedPowerSource == "Battery Unavailable (Charging) Still using Mains"){
         //do nothing
@@ -155,8 +155,8 @@ void SwitchPower(){
       if(laststate_mains == 1 && laststate_mains ==1){
         //do nothing
       }else{
-        digitalWrite(BATTERY_PIN, HIGH); // batt off
-        digitalWrite(MAINS_PIN, HIGH); // mains on
+        digitalWrite(BATTERY_PIN, LOW); // batt off
+        digitalWrite(MAINS_PIN, LOW); // mains on
       }
     }
 }
@@ -283,30 +283,30 @@ const char index_html[] PROGMEM = R"rawliteral(
       </tr>
       <tr>
         <th>Voltage</th>
-        <td> </td>
-        <td> </td>
-        <td> </td>
-        <td> </td>
+        <td id="mainsVoltage"> </td>
+        <td id="inverterVoltage"></td>
+        <td id="loadVoltage"></td>
+        <td id="batteryAvailability"></td>
       </tr>
       <tr>
         <th>Current</th>
-        <td> </td>
-        <td> </td>
-        <td> </td>
-        <td> </td>
+        <td id="mainsCurrent"></td>
+        <td id="inverterCurrent"></td>
+        <td id="loadCurrent"></td>
+        <td></td>
       </tr>
       <tr>
         <th>Energy</th>
-        <td> </td>
-        <td> </td>
-        <td> </td>
-        <td> </td>
+        <td id="mainsEnergy"></td>
+        <td id="inverterEnergy"></td>
+        <td id="loadEnergy"></td>
+        <td></td>
       </tr>
       <tr>
         <th>Power</th>
-        <td> </td>
-        <td> </td>
-        <td> </td>
+        <td id="mainsPower"></td>
+        <td id="inverterPower"></td>
+        <td id="loadPower"></td>
         <td> </td>
       </tr>
     </table>
@@ -335,6 +335,7 @@ const char index_html[] PROGMEM = R"rawliteral(
               <td>${data.inverterVoltage.toFixed(2)} V</td>
               <td>${data.mainsVoltage.toFixed(2)} V</td>
               <td>${data.loadVoltage.toFixed(2)} V</td>
+              <td></td>
               <td>${String(data.batteryAvailability)}</td>
             </tr>
             <tr>
@@ -415,7 +416,7 @@ void setup() {
     
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED) {
-        
+        delay(1000);
         Serial.println("Connecting to Network.....");
         Serial.print("WiFi Status: ");
         Serial.println(WiFi.status());
@@ -438,6 +439,7 @@ void setup() {
 
     // Route to get sensor data
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request) {
+        
         String data = "{\"inverterVoltage\":"; if(isnan(pzem1.voltage())){data+=String(0);} else {data+=String(pzem1.voltage());} data+= ",";
         data += "\"inverterCurrent\":";   if(isnan(pzem1.current())){data+=String(0);} else {data+=String(pzem1.current());} data+= ",";
         data += "\"inverterPower\":";   if(isnan(pzem1.power())){data+=String(0);} else {data+=String(pzem1.power());} data+= ",";
@@ -450,7 +452,7 @@ void setup() {
         data += "\"loadCurrent\":";   if(isnan(pzem3.current())){data+=String(0);} else {data+=String(pzem3.current());} data+= ",";
         data += "\"loadPower\":";   if(isnan(pzem3.power())){data+=String(0);} else {data+=String(pzem3.power());} data+= ",";
         data += "\"loadEnergy\":";   if(isnan(pzem3.energy())){data+=String(0);} else {data+=String(pzem3.energy());} data+= ",";
-        SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);  // Assign to global variable
+        
         data += "\"batteryAvailability\":";   data+=SelectedPowerSource; data+= "}";
         
         request->send(200, "application/json", data);
@@ -489,5 +491,7 @@ void loop() {
   Serial.println(batt_disconnect);
   Serial.print("Battery Reconnect Output (27): ");
   Serial.println(batt_reconnect);
+  
+  delay (1000);
   Serial.println("");
 }
