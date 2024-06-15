@@ -93,7 +93,7 @@ String selectpowersource(float InvData[], float MainsData[],float LoadData[]){
         chargebatt = "Battery Available (Charging) Using Battery";
       }
     }else if (batt_disconnect == 1 && batt_reconnect ==0){ //max threshold off and min threshold on
-      if(laststate_batt == 0 && laststate_mains ==0){ 
+      if(laststate_batt == 1 && laststate_mains ==1){ 
         chargebatt = "No Supply";
       }else if(laststate_batt == 0){ // last state of batt is on
         chargebatt = "Battery Available (Discharging) Using Battery";
@@ -126,8 +126,11 @@ void SwitchPower(){
   if(SelectedPowerSource == "Battery Available (Discharging) Using Battery"){ //max threshold on
       if(laststate_batt == 0){ //last state of batt is on
         //do nothing
-      }else if (laststate_mains == 0){ // last state of main is on
-        //do nothing
+      }else if (latstate_batt == 1){ // last state of batt is off
+        digitalWrite(BATTERY_PIN, HIGH); // batt on
+        digitalWrite(MAINS_PIN, LOW); // mains off
+        delay(3000);
+        digitalWrite(BATTERY_PIN, LOW); // toggle//max threshold off and min threshold on
       }
     }else if (SelectedPowerSource == "Battery Available (Charging) Using Battery"){
       if(laststate_batt == 0){
@@ -336,7 +339,7 @@ const char index_html[] PROGMEM = R"rawliteral(
               <td>${data.mainsVoltage.toFixed(2)} V</td>
               <td>${data.loadVoltage.toFixed(2)} V</td>
               <td></td>
-              <td>${String(data.batteryAvailability)}</td>
+              <td>${data.batteryAvailability}</td>
             </tr>
             <tr>
               <th>Current</th>
@@ -453,7 +456,7 @@ void setup() {
         data += "\"loadPower\":";   if(isnan(pzem3.power())){data+=String(0);} else {data+=String(pzem3.power());} data+= ",";
         data += "\"loadEnergy\":";   if(isnan(pzem3.energy())){data+=String(0);} else {data+=String(pzem3.energy());} data+= ",";
         
-        data += "\"batteryAvailability\":";   data+=SelectedPowerSource; data+= "}";
+        data += "\"batteryAvailability\":" += SelectedPowerSource + "\"}";
         
         request->send(200, "application/json", data);
     });
