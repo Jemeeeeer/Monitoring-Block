@@ -26,8 +26,8 @@ PZEM004Tv30 pzem2(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x55); //mains
 PZEM004Tv30 pzem3(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN, 0x58); //load
 
 // Declare global variables
-int laststate_batt = LOW;
-int laststate_mains = LOW;
+int actualstate_batt = LOW;
+int actualstate_mains = LOW;
 String battData;
 float InvData[4] = {0.0, 0.0, 0.0, 0.0};
 float MainsData[4] = {0.0, 0.0, 0.0, 0.0};
@@ -79,34 +79,34 @@ String selectpowersource(float InvData[], float MainsData[],float LoadData[]){
   float loadpow = LoadData[2];
   float loadene = LoadData[3];
 
-  laststate_batt = digitalRead(13); //battery
-  laststate_mains = digitalRead(14); //mains
+  actualstate_batt = digitalRead(13); //battery
+  actualstate_mains = digitalRead(14); //mains
   int batt_disconnect = (analogRead(BATT_DISCONNECT_PIN) > 2048) ? HIGH : LOW; //state of disconnect voltage
   int batt_reconnect = (analogRead(BATT_RECONNECT_PIN) > 2048) ? HIGH : LOW; //state of reconnect voltage
   String chargebatt;
   
   if(batt_reconnect==1){ //max threshold on
-      if(laststate_batt == 0){ //last state of batt is on
+      if(actualstate_batt == 0){ //last state of batt is on
         chargebatt = "Battery Available (Discharging) Using Battery";
         //do nothing
-      }else if (laststate_mains == 0){ // last state of main is on
+      }else if (actualstate_mains == 0){ // last state of main is on
         chargebatt = "Battery Available (Charging) Using Battery";
       }
     }else if (batt_disconnect == 1 && batt_reconnect ==0){ //max threshold off and min threshold on
-      if(laststate_batt == 1 && laststate_mains ==1){ 
+      if(actualstate_batt == 1 && actualstate_mains ==1){ 
         chargebatt = "No Supply";
-      }else if(laststate_batt == 0){ // last state of batt is on
+      }else if(actualstate_batt == 0){ // last state of batt is on
         chargebatt = "Battery Available (Discharging) Using Battery";
         //do nothing
-      }else if(laststate_mains == 0){ // last state of mains is on
+      }else if(actualstate_mains == 0){ // last state of mains is on
         chargebatt = "Battery Available (Charging) Using Mains";
         //do nothing
       }
     }else if(batt_disconnect == 0){
-      if(mainsvolt != 0 && laststate_mains == 0){ //last state of mains is on
+      if(mainsvolt != 0 && actualstate_mains == 0){ //last state of mains is on
         chargebatt = "Battery Unavailable (Charging) Still using Mains";
         //do nothing
-      }else if(mainsvolt != 0 && laststate_mains == 1) { //last state of mains is off
+      }else if(mainsvolt != 0 && actualstate_mains == 1) { //last state of mains is off
         chargebatt = "Battery Unavailable (Charging) Using Mains";
     }else{
       chargebatt = "No Supply";
@@ -120,20 +120,20 @@ String selectpowersource(float InvData[], float MainsData[],float LoadData[]){
 
 void SwitchPower(){
   SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);
-  laststate_batt = digitalRead(13); //battery
-  laststate_mains = digitalRead(14); //mains
+  actualstate_batt = digitalRead(13); //battery
+  actualstate_mains = digitalRead(14); //mains
   //Control Logic
   if(SelectedPowerSource == "Battery Available (Discharging) Using Battery"){ //max threshold on
-      if(laststate_batt == 0){ //last state of batt is on
+      if(actualstate_batt == 0){ //last state of batt is on
         //do nothing
-      }else if (latstate_batt == 1){ // last state of batt is off
+      }else if (actualstate_batt == 1){ // last state of batt is off
         digitalWrite(BATTERY_PIN, HIGH); // batt on
         digitalWrite(MAINS_PIN, LOW); // mains off
         delay(3000);
         digitalWrite(BATTERY_PIN, LOW); // toggle//max threshold off and min threshold on
       }
     }else if (SelectedPowerSource == "Battery Available (Charging) Using Battery"){
-      if(laststate_batt == 0){
+      if(actualstate_batt == 0){
         //do nothing
       }else{
         digitalWrite(BATTERY_PIN, HIGH); // batt on
@@ -144,7 +144,7 @@ void SwitchPower(){
     }else if (SelectedPowerSource == "Battery Available (Charging) Using Mains"){
         //do nothing
     }else if (SelectedPowerSource == "Battery Unavailable (Charging) Using Mains"){
-      if(laststate_mains == 0){
+      if(actualstate_mains == 0){
         //do nothing
       }else{
         digitalWrite(BATTERY_PIN, LOW); // batt off
@@ -155,7 +155,7 @@ void SwitchPower(){
     }else if (SelectedPowerSource == "Battery Unavailable (Charging) Still using Mains"){
         //do nothing
     }else if (SelectedPowerSource == "No Supply"){
-      if(laststate_mains == 1 && laststate_mains ==1){
+      if(actualstate_mains == 1 && actualstate_mains ==1){
         //do nothing
       }else{
         digitalWrite(BATTERY_PIN, LOW); // batt off
@@ -456,7 +456,7 @@ void setup() {
         data += "\"loadPower\":";   if(isnan(pzem3.power())){data+=String(0);} else {data+=String(pzem3.power());} data+= ",";
         data += "\"loadEnergy\":";   if(isnan(pzem3.energy())){data+=String(0);} else {data+=String(pzem3.energy());} data+= ",";
         
-        data += "\"batteryAvailability\":" += SelectedPowerSource + "\"}";
+        data += "\"batteryAvailability\":"; data+= String(SelectedPowerSource) + "\"}";
         
         request->send(200, "application/json", data);
     });
@@ -476,16 +476,16 @@ void loop() {
   SelectedPowerSource = selectpowersource(InvData, MainsData, LoadData);
   SwitchPower();
    
-  laststate_batt = digitalRead(13); //battery
-  laststate_mains = digitalRead(14); //mains
+  actualstate_batt = digitalRead(13); //battery
+  actualstate_mains = digitalRead(14); //mains
 
   //For monitoring through Serial Monitor
   Serial.print("Selected Power Source:");
   Serial.println(SelectedPowerSource);
   Serial.print("Battery Last State: ");
-  Serial.println(laststate_batt);
+  Serial.println(actualstate_batt);
   Serial.print("Mains Last State: ");
-  Serial.println(laststate_mains);
+  Serial.println(actualstate_mains);
   
   int batt_disconnect = (analogRead(BATT_DISCONNECT_PIN) > 2048) ? HIGH : LOW; //state of disconnect voltage
   int batt_reconnect = (analogRead(BATT_RECONNECT_PIN) > 2048) ? HIGH : LOW; //state of reconnect voltage
@@ -494,5 +494,6 @@ void loop() {
   Serial.println(batt_disconnect);
   Serial.print("Battery Reconnect Output (27): ");
   Serial.println(batt_reconnect);
+  
   Serial.println("");
 }
